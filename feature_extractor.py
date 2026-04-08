@@ -5,96 +5,102 @@ import os
 import torch
 import numpy as np
 from tqdm import tqdm
+
 from models import create_model
-from utils import set_seed, save_features, calculate_species_features
+from utils import set_seed, calculate_species_features
+
 
 class FeatureExtractor:
-    """特征提取器"""
-    
+    """特征提取器（对训练好的 TripletNetwork / TripletClassificationNetwork 取 embedding）"""
+
     def __init__(self, model, device, model_type='resnet50'):
         self.model = model
         self.device = device
         self.model_type = model_type
         self.model.eval()
         self.model.to(device)
-    
+
+    @torch.no_grad()
     def extract_features(self, dataloader):
         """
         提取特征
-        
-        Args:
-            dataloader: 数据加载器
-        
+
         Returns:
-            features: 特征矩阵 (n_samples, feature_dim)
-            labels: 标签列表
-            image_paths: 图像路径列表
+            features: (n_samples, feature_dim)
+            labels: (n_samples,)
+            image_paths: list[str]（如果 dataloader 返回 path）
         """
         features = []
         labels = []
         image_paths = []
-        
-        with torch.no_grad():
-            pbar = tqdm(dataloader, desc="提取特征")
-            for batch in pbar:
-                if len(batch) == 3:  # (image, label, path)
-                    images, batch_labels, batch_paths = batch
-                    images = images.to(self.device)
-                    
-                    # 提取特征
-                    if self.model_type == 'vit_b16':
-                        # ViT需要特殊处理
-                        batch_features = self.model.feature_extractor(images)
-                    else:
-                        batch_features = self.model.feature_extractor(images)
-                    
-                    features.append(batch_features.cpu().numpy())
-                    labels.extend(batch_labels.numpy())
-                    image_paths.extend(batch_paths)
-                else:
-                    # Triplet数据集
-                    anchor, positive, negative, batch_labels = batch
-                    anchor = anchor.to(self.device)
-                    
-                    anchor_feat = self.model.feature_extractor(anchor)
-                    features.append(anchor_feat.cpu().numpy())
-                    labels.extend(batch_labels.numpy())
-        
-        features = np.vstack(features)
+
+        pbar = tqdm(dataloader, desc="提取特征")
+        for batch in pbar:
+            # PlantDataset: (image, label, path)
+            if isinstance(batch, (tuple, list)) and len(batch) == 3:
+                images, batch_labels, batch_paths = batch
+                images = images.to(self.device)
+
+                batch_features = self.model.feature_extractor(images)
+
+                features.append(batch_features.cpu().numpy())
+                labels.extend(batch_labels.numpy())
+                image_paths.extend(batch_paths)
+                continue
+
+            # TripletDataset: (anchor, positive, negative, label)
+            if isinstance(batch, (tuple, list)) and len(batch) == 4:
+                anchor, _, _, batch_labels = batch
+                anchor = anchor.to(self.device)
+
+                anchor_feat = self.model.feature_extractor(anchor)
+                features.append(anchor_feat.cpu().numpy())
+                labels.extend(batch_labels.numpy())
+                continue
+
+            raise ValueError(f"未知 batch 格式: type={type(batch)}, len={len(batch) if hasattr(batch,'__len__') else 'NA'}")
+
+        features = np.vstack(features) if len(features) > 0 else np.empty((0, 0))
         labels = np.array(labels)
-        
+
         return features, labels, image_paths
-    
-    def extract_species_features(self, dataloader, aggregation='mean'):
+
+    def extract_species_features(self, dataloader, aggregation='mean', all_species_names=None):
         """
         提取物种级特征
-        
-        Args:
-            dataloader: 数据加载器
-            aggregation: 聚合方式 ('mean' 或 'median')
-        
-        Returns:
-            species_features: 物种特征矩阵 (n_species, feature_dim)
-            species_names: 物种名称列表
-        """
-        # 先提取所有图像的特征
-        image_features, image_labels, image_paths = self.extract_features(dataloader)
-        
-        # 计算物种级特征
-        species_features, species_names = calculate_species_features(
-            image_features, image_labels, aggregation=aggregation
-        )
 
+        Args:
+            dataloader: 数据加载器（通常是 PlantDataset 的 test_loader）
+            aggregation: 'mean' 或 'median'
+            all_species_names: 可选，label->name 映射表（list[str]）
+
+        Returns:
+            species_features: (n_species, feature_dim)
+            species_names: list[str]
+        """
+        image_features, image_labels, _ = self.extract_features(dataloader)
+
+        species_features, species_names = calculate_species_features(
+            image_features,
+            image_labels,
+            all_species_names=all_species_names,
+            aggregation=aggregation
+        )
         return species_features, species_names
 
-# --- 1) 修复 extract_species_features 中 calculate_species_features 的参数错位 ---
-species_features, species_names = calculate_species_features(
-    image_features, image_labels, aggregation=aggregation
-)
 
-# --- 2) load_trained_model：根据 checkpoint 判断是否含 classifier，并推断 num_classes ---
+def _infer_num_classes_from_state_dict(state_dict):
+    # 从 classifier 最后一层权重推断 num_classes
+    for k, v in state_dict.items():
+        if isinstance(v, torch.Tensor) and k.endswith(".weight") and ("classifier" in k) and v.ndim == 2:
+            return int(v.shape[0])
+    return None
+
+
 def load_trained_model(model_path, config, device):
-    """加载训练好的模型（兼容 Triplet-only 与 Triplet+Classification checkpoint）"""
+    """
+    加载训练好的模型（兼容 Triplet-only 与 Triplet+Classification checkpoint）
+    """
     checkpoint = torch.load(model_path, map_location=device)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
 
@@ -105,10 +111,7 @@ def load_trained_model(model_path, config, device):
         num_classes = checkpoint["model_meta"].get("num_classes")
 
     if num_classes is None and has_classifier:
-        for k, v in state_dict.items():
-            if k.endswith(".weight") and ("classifier" in k) and hasattr(v, "shape") and len(v.shape) == 2:
-                num_classes = v.shape[0]
-                break
+        num_classes = _infer_num_classes_from_state_dict(state_dict)
 
     model = create_model(
         model_type=config.MODEL_TYPE,
@@ -117,24 +120,16 @@ def load_trained_model(model_path, config, device):
         pretrained=False,
         use_triplet=True
     )
-
     model.load_state_dict(state_dict, strict=True)
     return model
+
 
 def extract_all_features(config, dataloader, model_path=None):
     """
     提取所有特征的主函数
-    
-    Args:
-        config: 配置对象
-        dataloader: 数据加载器
-        model_path: 模型路径（如果为None，则使用随机初始化的模型）
-    
-    Returns:
-        features, labels, image_paths
     """
     set_seed(config.SEED)
-    
+
     # 加载或创建模型
     if model_path and os.path.exists(model_path):
         print(f"加载训练好的模型: {model_path}")
@@ -147,14 +142,9 @@ def extract_all_features(config, dataloader, model_path=None):
             pretrained=True,
             use_triplet=True
         )
-    
-    # 创建特征提取器
-    extractor = FeatureExtractor(model, config.DEVICE, config.MODEL_TYPE)
-    
-    # 提取特征
-    features, labels, image_paths = extractor.extract_features(dataloader)
-    
-    print(f"提取了 {len(features)} 个样本的特征，特征维度: {features.shape[1]}")
-    
-    return features, labels, image_paths
 
+    extractor = FeatureExtractor(model, config.DEVICE, config.MODEL_TYPE)
+    features, labels, image_paths = extractor.extract_features(dataloader)
+
+    print(f"提取了 {len(features)} 个样本的特征，特征维度: {features.shape[1]}")
+    return features, labels, image_paths
