@@ -82,25 +82,43 @@ class FeatureExtractor:
         
         # 计算物种级特征
         species_features, species_names = calculate_species_features(
-            image_features, image_labels, aggregation
+            image_features, image_labels, aggregation=aggregation
         )
-        
+
         return species_features, species_names
 
+# --- 1) 修复 extract_species_features 中 calculate_species_features 的参数错位 ---
+species_features, species_names = calculate_species_features(
+    image_features, image_labels, aggregation=aggregation
+)
+
+# --- 2) load_trained_model：根据 checkpoint 判断是否含 classifier，并推断 num_classes ---
 def load_trained_model(model_path, config, device):
-    """加载训练好的模型"""
-    # 创建模型
+    """加载训练好的模型（兼容 Triplet-only 与 Triplet+Classification checkpoint）"""
+    checkpoint = torch.load(model_path, map_location=device)
+    state_dict = checkpoint.get("model_state_dict", checkpoint)
+
+    has_classifier = any(k.startswith("classifier.") for k in state_dict.keys())
+
+    num_classes = None
+    if isinstance(checkpoint.get("model_meta"), dict):
+        num_classes = checkpoint["model_meta"].get("num_classes")
+
+    if num_classes is None and has_classifier:
+        for k, v in state_dict.items():
+            if k.endswith(".weight") and ("classifier" in k) and hasattr(v, "shape") and len(v.shape) == 2:
+                num_classes = v.shape[0]
+                break
+
     model = create_model(
         model_type=config.MODEL_TYPE,
         feature_dim=config.FEATURE_DIM,
+        num_classes=num_classes if has_classifier else None,
         pretrained=False,
         use_triplet=True
     )
-    
-    # 加载权重
-    checkpoint = torch.load(model_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    
+
+    model.load_state_dict(state_dict, strict=True)
     return model
 
 def extract_all_features(config, dataloader, model_path=None):

@@ -16,6 +16,9 @@ from trainer import train_model
 from feature_extractor import extract_all_features, FeatureExtractor
 from phylogeny import build_phylogenetic_trees, calculate_distance_matrix
 
+# >>> 新增：设置类别数（用于 classification + triplet）
+config.NUM_CLASSES = len(species_names)
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='植物系统发育树构建')
