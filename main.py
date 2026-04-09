@@ -16,8 +16,6 @@ from trainer import train_model
 from feature_extractor import extract_all_features, FeatureExtractor
 from phylogeny import build_phylogenetic_trees, calculate_distance_matrix
 
-# >>> 新增：设置类别数（用于 classification + triplet）
-config.NUM_CLASSES = len(species_names)
 
 def main():
     """主函数"""
@@ -70,7 +68,11 @@ def main():
     if len(image_paths) == 0:
         print("错误: 没有找到图像数据！")
         return
-    
+
+    # >>> 新增：设置类别数（用于 classification + triplet）
+    config.NUM_CLASSES = len(species_names)
+    print(f"NUM_CLASSES (物种数): {config.NUM_CLASSES}")
+  
     # 创建数据加载器
     print("\n[2/5] 创建数据加载器...")
     train_loader, val_loader, test_loader = create_dataloaders(
