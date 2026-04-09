@@ -60,6 +60,28 @@ def calculate_distance_matrix(features, metric='euclidean'):
     distance_matrix = squareform(distances)
     return distance_matrix
 
+def enforce_monophyly_constraint(distance_matrix, species_names, penalty=100.0):
+    """
+    【新增核心功能】
+    通过修改距离矩阵强制实现属的单系性。
+    对所有跨属的距离加上巨大的惩罚值，确保同属物种优先聚类。
+    """
+    constrained_matrix = np.copy(distance_matrix)
+    n = len(species_names)
+    
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                # 提取两个物种的属名 (处理下划线和空格情况，提取第一个单词)
+                genus_i = str(species_names[i]).replace('_', ' ').split(' ')[0]
+                genus_j = str(species_names[j]).replace('_', ' ').split(' ')[0]
+                
+                # 如果不是同一个属，距离增加惩罚值
+                if genus_i != genus_j:
+                    constrained_matrix[i, j] += penalty
+                    
+    return constrained_matrix
+
 def build_upgma_tree(distance_matrix, species_names):
     """
     使用UPGMA方法构建系统发育树
@@ -284,6 +306,7 @@ def save_tree_nexus(tree, species_names, filepath):
     Phylo.write(tree_obj, filepath, "nexus")
     
     print(f"NEXUS格式树已安全保存到: {filepath}")
+
 def save_distance_matrix_excel(distance_matrix, species_names, filepath):
     """
     保存距离矩阵为Excel文件
@@ -349,6 +372,9 @@ def bootstrap_consensus_tree(features, labels, species_names, method='upgma', n_
         # 计算距离矩阵
         dist_matrix = calculate_distance_matrix(boot_species_features)
         
+        # 【新增：在自举过程中强制单系性限制】
+        dist_matrix = enforce_monophyly_constraint(dist_matrix, species_names, penalty=100.0)
+        
         # 构建树
         if method.lower() == 'upgma':
             tree = build_upgma_tree(dist_matrix, species_names)
@@ -385,12 +411,27 @@ def build_phylogenetic_trees(features, species_names, methods=['upgma', 'nj'],
     
     os.makedirs(output_dir, exist_ok=True)
     
-    print(f"计算距离矩阵 (度量: {distance_metric})...")
+    print(f"计算原始距离矩阵 (度量: {distance_metric})...")
     distance_matrix = calculate_distance_matrix(features, metric=distance_metric)
     
-    # 保存距离矩阵到Excel
-    excel_path = os.path.join(output_dir, "distance_matrix.xlsx")
-    save_distance_matrix_excel(distance_matrix, species_names, excel_path)
+    # 保存【原始】距离矩阵到Excel
+    excel_path_original = os.path.join(output_dir, "distance_matrix_original.xlsx")
+    save_distance_matrix_excel(distance_matrix, species_names, excel_path_original)
+    
+    # 【新增：施加单系性限制，生成受约束的矩阵】
+    print("施加单系性限制 (强制同属物种优先聚类)...")
+    
+    # 【动态计算最佳惩罚值】
+    # 提取当前矩阵中的最大真实距离，乘以 1.2 倍作为惩罚值
+    max_real_distance = np.max(distance_matrix)
+    optimal_penalty = max_real_distance * 1.2 
+    print(f"-> 自动计算的最佳跨属惩罚值为: {optimal_penalty:.4f}")
+    
+    constrained_matrix = enforce_monophyly_constraint(distance_matrix, species_names, penalty=optimal_penalty)
+    
+    # 保存【受约束】距离矩阵到Excel，方便对比
+    excel_path_constrained = os.path.join(output_dir, "distance_matrix_constrained.xlsx")
+    save_distance_matrix_excel(constrained_matrix, species_names, excel_path_constrained)
     
     trees = {}
     
@@ -398,10 +439,11 @@ def build_phylogenetic_trees(features, species_names, methods=['upgma', 'nj'],
         print(f"\n使用 {method.upper()} 方法构建系统发育树...")
         
         try:
+            # 注意：这里使用受约束的矩阵 constrained_matrix 来建树
             if method.lower() == 'upgma':
-                tree = build_upgma_tree(distance_matrix, species_names)
+                tree = build_upgma_tree(constrained_matrix, species_names)
             elif method.lower() == 'nj':
-                tree = build_nj_tree(distance_matrix, species_names)
+                tree = build_nj_tree(constrained_matrix, species_names)
             else:
                 print(f"警告: 不支持的方法 {method}，跳过")
                 continue
@@ -442,5 +484,5 @@ def build_phylogenetic_trees(features, species_names, methods=['upgma', 'nj'],
             import traceback
             traceback.print_exc()
     
+    # 保持原来的返回格式（与你的main.py兼容）
     return trees, distance_matrix
-
