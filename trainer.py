@@ -305,6 +305,17 @@ def train_model(config, train_loader, val_loader):
     )
 
     trainer = Trainer(model, train_loader, val_loader, config)
-    train_losses, val_losses, train_accuracies, val_accuracies = trainer.train()
+    trainer.train()
 
-    return trainer.model, train_losses, val_losses, train_accuracies, val_accuracies
+    history = {
+        "train_total_losses": trainer.train_total_losses,
+        "val_total_losses": trainer.val_total_losses,
+        "train_triplet_losses": trainer.train_triplet_losses,
+        "val_triplet_losses": trainer.val_triplet_losses,
+        "train_cls_losses": trainer.train_cls_losses,
+        "val_cls_losses": trainer.val_cls_losses,
+        "train_accuracies": trainer.train_accuracies,
+        "val_accuracies": trainer.val_accuracies,
+    }
+
+    return trainer.model, history
