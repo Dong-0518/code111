@@ -75,12 +75,14 @@ class Trainer:
         self.use_cls = bool(getattr(config, "USE_CLASSIFICATION_LOSS", True))
         self.cls_weight = float(getattr(config, "CLASSIFICATION_WEIGHT", 1.0))
         self.tri_weight = float(getattr(config, "TRIPLET_WEIGHT", 1.0))
-        self.cls_criterion = nn.CrossEntropyLoss()
+        self.cls_criterion = nn.CrossEntropyLoss(
+            label_smoothing=float(getattr(config, "LABEL_SMOOTHING", 0.0))
+        )
 
-        self.optimizer = optim.Adam(
+        self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=config.LEARNING_RATE,
-            weight_decay=1e-5
+            weight_decay=float(getattr(config, "WEIGHT_DECAY", 1e-4))
         )
 
         self.scheduler = CosineAnnealingLR(
@@ -99,6 +101,8 @@ class Trainer:
         self.train_accuracies = []
         self.val_accuracies = []
         self.best_val_loss = float("inf")
+        self.early_stopping_patience = int(getattr(config, "EARLY_STOPPING_PATIENCE", 0))
+        self.no_improve_epochs = 0
 
     def _forward(self, anchor, positive, negative):
         """
@@ -154,6 +158,9 @@ class Trainer:
 
             self.optimizer.zero_grad()
             loss.backward()
+            grad_clip = float(getattr(self.config, "GRAD_CLIP_NORM", 0.0))
+            if grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=grad_clip)
             self.optimizer.step()
 
             bs = anchor.size(0)
@@ -225,6 +232,9 @@ class Trainer:
         print(f"Margin: {self.config.MARGIN}")
         print(f"联合训练: USE_CLASSIFICATION_LOSS={self.use_cls}, "
               f"CLASSIFICATION_WEIGHT={self.cls_weight}, TRIPLET_WEIGHT={self.tri_weight}")
+        print(f"正则化: label_smoothing={getattr(self.config, 'LABEL_SMOOTHING', 0.0)}, "
+              f"weight_decay={getattr(self.config, 'WEIGHT_DECAY', 1e-4)}, "
+              f"dropout={getattr(self.config, 'CLASSIFIER_DROPOUT', 0.5)}")
         print("-" * 50)
 
         for epoch in range(1, self.config.NUM_EPOCHS + 1):
@@ -250,9 +260,15 @@ class Trainer:
 
             if va_total < self.best_val_loss:
                 self.best_val_loss = va_total
+                self.no_improve_epochs = 0
                 if getattr(self.config, "SAVE_MODEL", True):
                     self.save_model(epoch)
                 print(f"✓ 保存最佳模型 (val_loss: {va_total:.4f})")
+            else:
+                self.no_improve_epochs += 1
+                if self.early_stopping_patience > 0 and self.no_improve_epochs >= self.early_stopping_patience:
+                    print(f"触发早停：验证集 {self.no_improve_epochs} 个 epoch 无改进。")
+                    break
 
         print("\n训练完成！")
         return self.train_total_losses, self.val_total_losses, self.train_accuracies, self.val_accuracies
@@ -301,7 +317,9 @@ def train_model(config, train_loader, val_loader):
         feature_dim=config.FEATURE_DIM,
         num_classes=num_classes,
         pretrained=True,
-        use_triplet=True
+        use_triplet=True,
+        classifier_hidden_dim=getattr(config, "CLASSIFIER_HIDDEN_DIM", 256),
+        classifier_dropout=getattr(config, "CLASSIFIER_DROPOUT", 0.5)
     )
 
     trainer = Trainer(model, train_loader, val_loader, config)

@@ -3,6 +3,7 @@
 """
 import os
 import argparse
+from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -12,7 +13,8 @@ from config import Config
 from utils import (set_seed, visualize_features, plot_distance_matrix, save_features,
                    plot_distance_distribution, plot_feature_correlation, 
                    plot_species_feature_comparison, plot_clustering_dendrogram,
-                   plot_feature_statistics, detect_outliers, numpy_to_nexus_file)
+                   plot_feature_statistics, detect_outliers, numpy_to_nexus_file,
+                   evaluate_metric_learning_quality, append_experiment_record)
 from data_loader import load_dataset, create_dataloaders
 from models import create_model
 from trainer import train_model
@@ -106,12 +108,34 @@ def main():
                        help='模型类型')
     parser.add_argument('--skip_training', action='store_true',
                        help='跳过训练，直接使用预训练模型')
+    parser.add_argument('--classification_weight', type=float, default=None,
+                       help='覆盖 config.CLASSIFICATION_WEIGHT，例如 1.0')
+    parser.add_argument('--triplet_weight', type=float, default=None,
+                       help='覆盖 config.TRIPLET_WEIGHT，例如 1.0')
+    parser.add_argument('--margin', type=float, default=None,
+                       help='覆盖 config.MARGIN，例如 0.5')
+    parser.add_argument('--learning_rate', type=float, default=None,
+                       help='覆盖 config.LEARNING_RATE，例如 1e-4')
+    parser.add_argument('--num_epochs', type=int, default=None,
+                       help='覆盖 config.NUM_EPOCHS，例如 40')
+    parser.add_argument('--notes', type=str, default='',
+                       help='实验备注，会写入实验记录表')
     
     args = parser.parse_args()
     
     # 创建配置
     config = Config()
     config.MODEL_TYPE = args.model_type
+    if args.classification_weight is not None:
+        config.CLASSIFICATION_WEIGHT = args.classification_weight
+    if args.triplet_weight is not None:
+        config.TRIPLET_WEIGHT = args.triplet_weight
+    if args.margin is not None:
+        config.MARGIN = args.margin
+    if args.learning_rate is not None:
+        config.LEARNING_RATE = args.learning_rate
+    if args.num_epochs is not None:
+        config.NUM_EPOCHS = args.num_epochs
     config.create_output_dirs()
     
     # 设置随机种子
@@ -133,6 +157,7 @@ def main():
     print(f"数据路径: {data_path}")
     print(f"模型类型: {config.MODEL_TYPE}")
     print(f"特征维度: {config.FEATURE_DIM}")
+    print(f"损失权重: classification={config.CLASSIFICATION_WEIGHT}, triplet={config.TRIPLET_WEIGHT}")
     print(f"设备: {config.DEVICE}")
     print("=" * 60)
     
@@ -223,6 +248,33 @@ def main():
         
         # 分类任务评估图（混淆矩阵 + 每类F1）
         evaluate_classification_and_plot(model, val_loader, config, species_names)
+
+        # 记录实验（Excel 可打开）
+        if len(val_accuracies) > 0:
+            best_idx = int(np.argmax(val_accuracies))
+            experiment_record_path = os.path.join(config.OUTPUT_DIR, "experiments", "experiment_log.csv")
+            append_experiment_record(
+                {
+                    "run_time_utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "image_type": args.image_type,
+                    "model_type": config.MODEL_TYPE,
+                    "seed": config.SEED,
+                    "num_epochs": config.NUM_EPOCHS,
+                    "learning_rate": config.LEARNING_RATE,
+                    "margin": config.MARGIN,
+                    "classification_weight": config.CLASSIFICATION_WEIGHT,
+                    "triplet_weight": config.TRIPLET_WEIGHT,
+                    "batch_size": config.BATCH_SIZE,
+                    "best_epoch_by_val_acc": best_idx + 1,
+                    "best_val_acc": float(val_accuracies[best_idx]),
+                    "best_val_total_loss": float(val_total_losses[best_idx]),
+                    "best_val_triplet_loss": float(val_triplet_losses[best_idx]),
+                    "best_val_classification_loss": float(val_cls_losses[best_idx]),
+                    "notes": args.notes,
+                },
+                experiment_record_path
+            )
+            print(f"实验记录已追加到: {experiment_record_path}")
     else:
         print("\n[3/5] 跳过训练，使用预训练模型")
     
@@ -321,6 +373,14 @@ def main():
             f"{args.image_type}_{config.MODEL_TYPE}_tsne.pdf"
         )
         visualize_features(features, labels, species_names, tsne_path)
+
+        # 新增：度量学习质量评估（给出可比较的量化标准）
+        evaluate_metric_learning_quality(
+            features=features,
+            labels=labels,
+            species_names=species_names,
+            output_dir=config.OUTPUT_DIR
+        )
         
         # 构建系统发育树
         if args.mode in ['phylogeny', 'full']:

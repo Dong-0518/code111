@@ -22,6 +22,8 @@ class Config:
     # 训练参数
     NUM_EPOCHS = 50
     LEARNING_RATE = 1e-4
+    WEIGHT_DECAY = 1e-4
+    GRAD_CLIP_NORM = 5.0
     MARGIN = 0.5  # Triplet Loss margin
 
     # Triplet 采样策略
@@ -33,6 +35,12 @@ class Config:
     USE_CLASSIFICATION_LOSS = True
     CLASSIFICATION_WEIGHT = 1.0
     TRIPLET_WEIGHT = 1.0
+    LABEL_SMOOTHING = 0.1
+    CLASSIFIER_HIDDEN_DIM = 256
+    CLASSIFIER_DROPOUT = 0.6
+
+    # 早停
+    EARLY_STOPPING_PATIENCE = 8
 
     # 运行时动态写入（在 main.py 载入数据集后设置）
     NUM_CLASSES = None

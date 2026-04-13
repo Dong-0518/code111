@@ -70,6 +70,12 @@ python main.py --mode phylogeny --image_type specimen --model_type resnet50
   - `inception_resnet_v2`: InceptionResNetV2（推荐用于生境图像）
 
 - `--skip_training`: 跳过训练，直接使用预训练模型
+- `--classification_weight`: 覆盖分类损失权重（例如 1.0）
+- `--triplet_weight`: 覆盖 Triplet 损失权重（例如 1.0）
+- `--margin`: 覆盖 Triplet Loss margin
+- `--learning_rate`: 覆盖学习率
+- `--num_epochs`: 覆盖训练轮数
+- `--notes`: 实验备注，会写入实验记录 CSV
 
 ### 3. 配置修改
 
@@ -82,6 +88,12 @@ python main.py --mode phylogeny --image_type specimen --model_type resnet50
 - `LEARNING_RATE`: 学习率（默认1e-4）
 - `MARGIN`: Triplet Loss的margin（默认0.5）
 - `FEATURE_DIM`: 特征维度（默认512）
+
+### 4. 调参与实验记录
+
+- 调参顺序说明见：`TUNING_STEPS.md`
+- Excel 模板见：`experiment_record_template.csv`
+- 训练后会自动记录到：`outputs/experiments/experiment_log.csv`
 
 ## 项目结构
 
