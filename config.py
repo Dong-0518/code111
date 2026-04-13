@@ -22,7 +22,7 @@ class Config:
     NUM_EPOCHS = 50
     LEARNING_RATE = 1e-4
     MARGIN = 0.5  # Triplet Loss的margin
-    TRIPLET_SELECTION_STRATEGY = "hard"  # "random", "hard", "semi-hard"
+    TRIPLET_SELECTION_STRATEGY = "hard"  # "random", "hard", "semi-hard", "batch_hard"
     
     # 特征提取
     FEATURE_DIM = 512
@@ -53,4 +53,3 @@ class Config:
         os.makedirs(os.path.join(Config.OUTPUT_DIR, "features"), exist_ok=True)
         os.makedirs(os.path.join(Config.OUTPUT_DIR, "trees"), exist_ok=True)
         os.makedirs(os.path.join(Config.OUTPUT_DIR, "figures"), exist_ok=True)
-
