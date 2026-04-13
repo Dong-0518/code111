@@ -4,6 +4,7 @@
 import os
 import glob
 import numpy as np
+from collections import Counter
 from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -274,6 +275,26 @@ def create_dataloaders(image_paths, labels, batch_size=32, train_ratio=0.7,
     print(f"训练集: {len(X_train)} 张图像")
     print(f"验证集: {len(X_val)} 张图像")
     print(f"测试集: {len(X_test)} 张图像")
+
+    # 打印划分后的类别覆盖信息，避免“验证集缺类”导致指标偏差
+    all_classes = sorted(set(labels))
+    train_counter = Counter(y_train)
+    val_counter = Counter(y_val)
+    test_counter = Counter(y_test)
+    missing_train = [c for c in all_classes if train_counter.get(c, 0) == 0]
+    missing_val = [c for c in all_classes if val_counter.get(c, 0) == 0]
+    missing_test = [c for c in all_classes if test_counter.get(c, 0) == 0]
+
+    print(f"类别覆盖统计: 总类别={len(all_classes)}, "
+          f"train有样本={len(all_classes)-len(missing_train)}, "
+          f"val有样本={len(all_classes)-len(missing_val)}, "
+          f"test有样本={len(all_classes)-len(missing_test)}")
+    if missing_train:
+        print(f"[WARN] 训练集缺失类别: {missing_train}")
+    if missing_val:
+        print(f"[WARN] 验证集缺失类别: {missing_val}")
+    if missing_test:
+        print(f"[WARN] 测试集缺失类别: {missing_test}")
 
     # 创建数据集
     if use_triplet:
