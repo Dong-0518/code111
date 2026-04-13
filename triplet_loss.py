@@ -74,6 +74,56 @@ class HardTripletLoss(nn.Module):
         
         return loss
 
+class BatchHardTripletLoss(nn.Module):
+    """Batch-Hard Triplet Loss：在batch内挖掘最难正负样本"""
+    
+    def __init__(self, margin=0.5):
+        super(BatchHardTripletLoss, self).__init__()
+        self.margin = margin
+    
+    def forward(self, embeddings, labels):
+        """
+        Args:
+            embeddings: 特征向量 (batch_size, feature_dim)，默认已L2归一化
+            labels: 类别标签 (batch_size,)
+        Returns:
+            loss: Batch-Hard Triplet Loss
+            acc: batch内triplet准确率（hard_pos < hard_neg）
+        """
+        if embeddings.size(0) < 2:
+            return embeddings.new_tensor(0.0), embeddings.new_tensor(0.0)
+        
+        labels = labels.view(-1)
+        dist_mat = torch.cdist(embeddings, embeddings, p=2)  # (B, B)
+        
+        label_eq = labels.unsqueeze(0) == labels.unsqueeze(1)  # (B, B)
+        eye = torch.eye(labels.size(0), dtype=torch.bool, device=labels.device)
+        
+        pos_mask = label_eq & (~eye)
+        neg_mask = ~label_eq
+        
+        # 若某个样本在batch中没有正样本或负样本，跳过
+        valid_pos = pos_mask.any(dim=1)
+        valid_neg = neg_mask.any(dim=1)
+        valid = valid_pos & valid_neg
+        if not valid.any():
+            return embeddings.new_tensor(0.0), embeddings.new_tensor(0.0)
+        
+        pos_dist = dist_mat.clone()
+        pos_dist[~pos_mask] = -1e9
+        hardest_pos, _ = pos_dist.max(dim=1)
+        
+        neg_dist = dist_mat.clone()
+        neg_dist[~neg_mask] = 1e9
+        hardest_neg, _ = neg_dist.min(dim=1)
+        
+        hardest_pos = hardest_pos[valid]
+        hardest_neg = hardest_neg[valid]
+        
+        loss = torch.clamp(hardest_pos - hardest_neg + self.margin, min=0.0).mean()
+        acc = (hardest_pos < hardest_neg).float().mean()
+        return loss, acc
+
 def select_hard_negatives(anchor_features, negative_features, k=1):
     """
     选择hard negative样本

@@ -10,7 +10,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
 from tqdm import tqdm
 import numpy as np
 from models import create_model
-from triplet_loss import TripletLoss, HardTripletLoss
+from triplet_loss import TripletLoss, HardTripletLoss, BatchHardTripletLoss
 from utils import set_seed
 
 class Trainer:
@@ -27,7 +27,9 @@ class Trainer:
         self.model.to(self.device)
         
         # 损失函数
-        if config.TRIPLET_SELECTION_STRATEGY == "hard":
+        if config.TRIPLET_SELECTION_STRATEGY == "batch_hard":
+            self.criterion = BatchHardTripletLoss(margin=config.MARGIN)
+        elif config.TRIPLET_SELECTION_STRATEGY == "hard":
             self.criterion = HardTripletLoss(margin=config.MARGIN)
         else:
             self.criterion = TripletLoss(margin=config.MARGIN)
@@ -62,26 +64,39 @@ class Trainer:
         num_batches = 0
         
         pbar = tqdm(self.train_loader, desc="训练中")
-        for anchor, positive, negative, labels in pbar:
-            anchor = anchor.to(self.device)
-            positive = positive.to(self.device)
-            negative = negative.to(self.device)
-            
-            # 前向传播
-            anchor_feat, positive_feat, negative_feat = self.model(
-                anchor, positive, negative
-            )
-            
-            # 计算损失
-            loss = self.criterion(anchor_feat, positive_feat, negative_feat)
-            
-            # 计算准确率 (dist(a,p) < dist(a,n))
-            with torch.no_grad():
-                dist_pos = F.pairwise_distance(anchor_feat, positive_feat)
-                dist_neg = F.pairwise_distance(anchor_feat, negative_feat)
-                correct = (dist_pos < dist_neg).float().sum().item()
+        for batch in pbar:
+            if self.config.TRIPLET_SELECTION_STRATEGY == "batch_hard":
+                # batch: (image, label, path)
+                images, labels, _ = batch
+                images = images.to(self.device)
+                labels = labels.to(self.device)
+                
+                embeddings = self.model.feature_extractor(images)
+                loss, batch_acc = self.criterion(embeddings, labels)
+                correct = batch_acc.item() * images.size(0)
                 total_correct += correct
-                total_samples += anchor.size(0)
+                total_samples += images.size(0)
+            else:
+                anchor, positive, negative, labels = batch
+                anchor = anchor.to(self.device)
+                positive = positive.to(self.device)
+                negative = negative.to(self.device)
+                
+                # 前向传播
+                anchor_feat, positive_feat, negative_feat = self.model(
+                    anchor, positive, negative
+                )
+                
+                # 计算损失
+                loss = self.criterion(anchor_feat, positive_feat, negative_feat)
+                
+                # 计算准确率 (dist(a,p) < dist(a,n))
+                with torch.no_grad():
+                    dist_pos = F.pairwise_distance(anchor_feat, positive_feat)
+                    dist_neg = F.pairwise_distance(anchor_feat, negative_feat)
+                    correct = (dist_pos < dist_neg).float().sum().item()
+                    total_correct += correct
+                    total_samples += anchor.size(0)
             
             # 反向传播
             self.optimizer.zero_grad()
@@ -92,7 +107,8 @@ class Trainer:
             num_batches += 1
             
             # 更新进度条
-            current_acc = correct / anchor.size(0)
+            batch_size = images.size(0) if self.config.TRIPLET_SELECTION_STRATEGY == "batch_hard" else anchor.size(0)
+            current_acc = correct / batch_size
             pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{current_acc:.4f}'})
         
         avg_loss = total_loss / num_batches
@@ -109,25 +125,37 @@ class Trainer:
         
         with torch.no_grad():
             pbar = tqdm(self.val_loader, desc="验证中")
-            for anchor, positive, negative, labels in pbar:
-                anchor = anchor.to(self.device)
-                positive = positive.to(self.device)
-                negative = negative.to(self.device)
-                
-                # 前向传播
-                anchor_feat, positive_feat, negative_feat = self.model(
-                    anchor, positive, negative
-                )
-                
-                # 计算损失
-                loss = self.criterion(anchor_feat, positive_feat, negative_feat)
-                
-                # 计算准确率
-                dist_pos = F.pairwise_distance(anchor_feat, positive_feat)
-                dist_neg = F.pairwise_distance(anchor_feat, negative_feat)
-                correct = (dist_pos < dist_neg).float().sum().item()
-                total_correct += correct
-                total_samples += anchor.size(0)
+            for batch in pbar:
+                if self.config.TRIPLET_SELECTION_STRATEGY == "batch_hard":
+                    images, labels, _ = batch
+                    images = images.to(self.device)
+                    labels = labels.to(self.device)
+                    
+                    embeddings = self.model.feature_extractor(images)
+                    loss, batch_acc = self.criterion(embeddings, labels)
+                    correct = batch_acc.item() * images.size(0)
+                    total_correct += correct
+                    total_samples += images.size(0)
+                else:
+                    anchor, positive, negative, labels = batch
+                    anchor = anchor.to(self.device)
+                    positive = positive.to(self.device)
+                    negative = negative.to(self.device)
+                    
+                    # 前向传播
+                    anchor_feat, positive_feat, negative_feat = self.model(
+                        anchor, positive, negative
+                    )
+                    
+                    # 计算损失
+                    loss = self.criterion(anchor_feat, positive_feat, negative_feat)
+                    
+                    # 计算准确率
+                    dist_pos = F.pairwise_distance(anchor_feat, positive_feat)
+                    dist_neg = F.pairwise_distance(anchor_feat, negative_feat)
+                    correct = (dist_pos < dist_neg).float().sum().item()
+                    total_correct += correct
+                    total_samples += anchor.size(0)
                 
                 total_loss += loss.item()
                 num_batches += 1
@@ -224,4 +252,3 @@ def train_model(config, train_loader, val_loader):
     train_losses, val_losses, train_accuracies, val_accuracies = trainer.train()
     
     return trainer.model, train_losses, val_losses, train_accuracies, val_accuracies
-

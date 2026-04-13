@@ -203,7 +203,8 @@ def load_dataset(data_path, image_type='specimen'):
 
 def create_dataloaders(image_paths, labels, batch_size=32, train_ratio=0.7, 
                       val_ratio=0.2, test_ratio=0.1, use_triplet=False, 
-                      image_size=224, num_workers=4, model_type='resnet50'):
+                      image_size=224, num_workers=4, model_type='resnet50',
+                      triplet_strategy='hard'):
     """
     创建数据加载器
     
@@ -218,6 +219,7 @@ def create_dataloaders(image_paths, labels, batch_size=32, train_ratio=0.7,
         image_size: 图像尺寸
         num_workers: 数据加载线程数
         model_type: 模型类型（用于选择正确的图像变换）
+        triplet_strategy: Triplet采样策略（"random"/"hard"/"semi-hard"/"batch_hard"）
     
     Returns:
         train_loader, val_loader, test_loader
@@ -240,13 +242,22 @@ def create_dataloaders(image_paths, labels, batch_size=32, train_ratio=0.7,
     
     # 创建数据集
     if use_triplet:
-        train_dataset = TripletDataset(X_train, y_train, 
-                                      transform=get_transforms('train', image_size, model_type))
-        val_dataset = TripletDataset(X_val, y_val, 
-                                    transform=get_transforms('test', image_size, model_type))
-        # 测试集始终使用PlantDataset，以便于特征提取和评估（不需要Triplet）
-        test_dataset = PlantDataset(X_test, y_test, 
+        if triplet_strategy == 'batch_hard':
+            # Batch-Hard在batch内挖掘正负样本，数据集只需返回(image, label, path)
+            train_dataset = PlantDataset(X_train, y_train, 
+                                       transform=get_transforms('train', image_size, model_type))
+            val_dataset = PlantDataset(X_val, y_val, 
                                      transform=get_transforms('test', image_size, model_type))
+            test_dataset = PlantDataset(X_test, y_test, 
+                                      transform=get_transforms('test', image_size, model_type))
+        else:
+            train_dataset = TripletDataset(X_train, y_train, 
+                                          transform=get_transforms('train', image_size, model_type))
+            val_dataset = TripletDataset(X_val, y_val, 
+                                        transform=get_transforms('test', image_size, model_type))
+            # 测试集始终使用PlantDataset，以便于特征提取和评估（不需要Triplet）
+            test_dataset = PlantDataset(X_test, y_test, 
+                                         transform=get_transforms('test', image_size, model_type))
     else:
         train_dataset = PlantDataset(X_train, y_train, 
                                    transform=get_transforms('train', image_size, model_type))

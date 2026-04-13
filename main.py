@@ -79,7 +79,8 @@ def main():
         use_triplet=True,
         image_size=config.IMAGE_SIZE,
         num_workers=config.NUM_WORKERS,
-        model_type=config.MODEL_TYPE
+        model_type=config.MODEL_TYPE,
+        triplet_strategy=config.TRIPLET_SELECTION_STRATEGY
     )
     
     # 训练模型
@@ -301,4 +302,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
