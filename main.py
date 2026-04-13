@@ -5,6 +5,9 @@ import os
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
+from sklearn.metrics import confusion_matrix, classification_report
+import seaborn as sns
 from config import Config
 from utils import (set_seed, visualize_features, plot_distance_matrix, save_features,
                    plot_distance_distribution, plot_feature_correlation, 
@@ -15,6 +18,78 @@ from models import create_model
 from trainer import train_model
 from feature_extractor import extract_all_features, FeatureExtractor
 from phylogeny import build_phylogenetic_trees, calculate_distance_matrix
+
+
+def evaluate_classification_and_plot(model, data_loader, config, species_names):
+    """在验证集上评估分类并输出混淆矩阵与每类F1图。"""
+    model.eval()
+    y_true, y_pred = [], []
+
+    with torch.no_grad():
+        for anchor, positive, negative, labels in data_loader:
+            anchor = anchor.to(config.DEVICE)
+            positive = positive.to(config.DEVICE)
+            negative = negative.to(config.DEVICE)
+
+            outputs = model(anchor, positive, negative)
+            if not (isinstance(outputs, (tuple, list)) and len(outputs) == 6):
+                print("当前模型无分类头输出，跳过分类可视化。")
+                return
+
+            _, _, _, anchor_logits, _, _ = outputs
+            preds = anchor_logits.argmax(dim=1).cpu().numpy()
+            y_pred.extend(preds.tolist())
+            y_true.extend(labels.numpy().tolist())
+
+    if len(y_true) == 0:
+        print("验证集为空，跳过分类可视化。")
+        return
+
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    label_ids = np.unique(y_true)
+    target_names = [species_names[int(i)] if int(i) < len(species_names) else str(i) for i in label_ids]
+
+    # 混淆矩阵
+    cm = confusion_matrix(y_true, y_pred, labels=label_ids, normalize='true')
+    plt.figure(figsize=(max(10, len(label_ids) * 0.35), max(8, len(label_ids) * 0.35)))
+    sns.heatmap(
+        cm,
+        cmap='Blues',
+        xticklabels=target_names,
+        yticklabels=target_names,
+        vmin=0,
+        vmax=1,
+        cbar_kws={'label': 'Recall'}
+    )
+    plt.title('Validation Confusion Matrix (Row-normalized)', fontsize=14, fontweight='bold')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.xticks(rotation=90, fontsize=7)
+    plt.yticks(rotation=0, fontsize=7)
+    plt.tight_layout()
+    cm_path = os.path.join(config.OUTPUT_DIR, "figures", "validation_confusion_matrix.pdf")
+    plt.savefig(cm_path, bbox_inches='tight', format='pdf')
+    plt.close()
+    print(f"分类混淆矩阵已保存到: {cm_path}")
+
+    # 每类F1
+    report = classification_report(y_true, y_pred, labels=label_ids, output_dict=True, zero_division=0)
+    per_class_f1 = [report[str(int(i))]['f1-score'] for i in label_ids]
+
+    plt.figure(figsize=(max(12, len(label_ids) * 0.35), 6))
+    plt.bar(range(len(label_ids)), per_class_f1, color='teal', alpha=0.8)
+    plt.ylim(0, 1.0)
+    plt.xlabel("Species")
+    plt.ylabel("F1-score")
+    plt.title("Validation Per-class F1-score", fontsize=14, fontweight='bold')
+    plt.xticks(range(len(label_ids)), target_names, rotation=90, fontsize=7)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    f1_path = os.path.join(config.OUTPUT_DIR, "figures", "validation_per_class_f1.pdf")
+    plt.savefig(f1_path, bbox_inches='tight', format='pdf')
+    plt.close()
+    print(f"每类F1图已保存到: {f1_path}")
 
 
 def main():
@@ -92,21 +167,45 @@ def main():
     
     if args.mode in ['train', 'full'] and not args.skip_training:
         print("\n[3/5] 训练模型...")
-        model, train_losses, val_losses, train_accuracies, val_accuracies = train_model(config, train_loader, val_loader)
+        model, history = train_model(config, train_loader, val_loader)
+        train_total_losses = history["train_total_losses"]
+        val_total_losses = history["val_total_losses"]
+        train_triplet_losses = history["train_triplet_losses"]
+        val_triplet_losses = history["val_triplet_losses"]
+        train_cls_losses = history["train_cls_losses"]
+        val_cls_losses = history["val_cls_losses"]
+        train_accuracies = history["train_accuracies"]
+        val_accuracies = history["val_accuracies"]
         
-        # 绘制训练损失曲线
+        # 绘制总损失曲线
         plt.figure(figsize=(10, 6))
-        plt.plot(train_losses, label='Training Loss', linewidth=2)
-        plt.plot(val_losses, label='Validation Loss', linewidth=2)
+        plt.plot(train_total_losses, label='Training Total Loss', linewidth=2)
+        plt.plot(val_total_losses, label='Validation Total Loss', linewidth=2)
         plt.xlabel('Epoch', fontsize=12)
         plt.ylabel('Loss', fontsize=12)
-        plt.title('Training Loss Curve', fontsize=14, fontweight='bold')
+        plt.title('Training Total Loss Curve', fontsize=14, fontweight='bold')
         plt.legend(fontsize=11)
         plt.grid(True, alpha=0.3)
-        loss_curve_path = os.path.join(config.OUTPUT_DIR, "figures", "training_loss_curve.pdf")
+        loss_curve_path = os.path.join(config.OUTPUT_DIR, "figures", "training_total_loss_curve.pdf")
         plt.savefig(loss_curve_path, bbox_inches='tight', format='pdf')
         plt.close()
-        print(f"训练损失曲线已保存到: {loss_curve_path}")
+        print(f"训练总损失曲线已保存到: {loss_curve_path}")
+
+        # 绘制 triplet 与 classification 损失曲线
+        plt.figure(figsize=(10, 6))
+        plt.plot(train_triplet_losses, label='Train Triplet Loss', linewidth=2)
+        plt.plot(val_triplet_losses, label='Val Triplet Loss', linewidth=2)
+        plt.plot(train_cls_losses, label='Train Classification Loss', linewidth=2, linestyle='--')
+        plt.plot(val_cls_losses, label='Val Classification Loss', linewidth=2, linestyle='--')
+        plt.xlabel('Epoch', fontsize=12)
+        plt.ylabel('Loss', fontsize=12)
+        plt.title('Triplet / Classification Loss Curves', fontsize=14, fontweight='bold')
+        plt.legend(fontsize=10)
+        plt.grid(True, alpha=0.3)
+        detail_loss_path = os.path.join(config.OUTPUT_DIR, "figures", "training_triplet_classification_loss_curve.pdf")
+        plt.savefig(detail_loss_path, bbox_inches='tight', format='pdf')
+        plt.close()
+        print(f"Triplet/分类损失曲线已保存到: {detail_loss_path}")
 
         # 绘制训练准确率曲线
         plt.figure(figsize=(10, 6))
@@ -121,6 +220,9 @@ def main():
         plt.savefig(acc_curve_path, bbox_inches='tight', format='pdf')
         plt.close()
         print(f"训练准确率曲线已保存到: {acc_curve_path}")
+        
+        # 分类任务评估图（混淆矩阵 + 每类F1）
+        evaluate_classification_and_plot(model, val_loader, config, species_names)
     else:
         print("\n[3/5] 跳过训练，使用预训练模型")
     
@@ -306,4 +408,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
