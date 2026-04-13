@@ -88,10 +88,15 @@ class TripletClassificationNetwork(nn.Module):
          anchor_logits, positive_logits, negative_logits)
     """
 
-    def __init__(self, feature_extractor, num_classes):
+    def __init__(self, feature_extractor, num_classes, classifier_hidden_dim=256, classifier_dropout=0.5):
         super().__init__()
         self.feature_extractor = feature_extractor
-        self.classifier = ClassificationHead(feature_extractor.feature_dim, num_classes)
+        self.classifier = ClassificationHead(
+            feature_extractor.feature_dim,
+            num_classes,
+            hidden_dim=classifier_hidden_dim,
+            dropout=classifier_dropout
+        )
 
     def _encode(self, x):
         feat = self.feature_extractor(x)
@@ -106,7 +111,8 @@ class TripletClassificationNetwork(nn.Module):
 
 
 def create_model(model_type='resnet50', feature_dim=512, num_classes=None,
-                 pretrained=True, use_triplet=True):
+                 pretrained=True, use_triplet=True, classifier_hidden_dim=256,
+                 classifier_dropout=0.5):
     """
     创建模型：
 
@@ -118,7 +124,12 @@ def create_model(model_type='resnet50', feature_dim=512, num_classes=None,
     feature_extractor = FeatureExtractor(model_type, feature_dim, pretrained)
 
     if use_triplet and (num_classes is not None):
-        return TripletClassificationNetwork(feature_extractor, num_classes)
+        return TripletClassificationNetwork(
+            feature_extractor,
+            num_classes,
+            classifier_hidden_dim=classifier_hidden_dim,
+            classifier_dropout=classifier_dropout
+        )
     if use_triplet:
         return TripletNetwork(feature_extractor)
     if num_classes is not None:

@@ -2,11 +2,14 @@
 工具函数
 """
 import os
+import json
+import csv
 import random
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 import seaborn as sns
 
 def set_seed(seed=42):
@@ -486,3 +489,141 @@ def numpy_to_nexus_file(data, names, fp):
             f.write(f'{name}  {features_str}\n')
         f.write(';\n')
         f.write('end;\n')
+
+
+def evaluate_metric_learning_quality(features, labels, species_names, output_dir):
+    """
+    评估度量学习质量并保存指标：
+    - Silhouette（越大越好）
+    - Davies-Bouldin（越小越好）
+    - Calinski-Harabasz（越大越好）
+    - 同类/异类距离均值与比值（越小越好）
+    """
+    labels = np.asarray(labels)
+    features = np.asarray(features)
+    unique_labels = np.unique(labels)
+
+    if len(unique_labels) < 2:
+        print("类别数 < 2，跳过聚类质量评估。")
+        return None
+
+    # 外部聚类指标（基于标签）
+    silhouette = float(silhouette_score(features, labels))
+    dbi = float(davies_bouldin_score(features, labels))
+    ch = float(calinski_harabasz_score(features, labels))
+
+    # 统计同类/异类距离
+    n = features.shape[0]
+    intra, inter = [], []
+    for i in range(n):
+        for j in range(i + 1, n):
+            dist = float(np.linalg.norm(features[i] - features[j]))
+            if labels[i] == labels[j]:
+                intra.append(dist)
+            else:
+                inter.append(dist)
+
+    intra_mean = float(np.mean(intra)) if intra else float("nan")
+    inter_mean = float(np.mean(inter)) if inter else float("nan")
+    separation_ratio = float(intra_mean / inter_mean) if inter_mean > 0 else float("nan")
+
+    metrics = {
+        "n_samples": int(n),
+        "n_species": int(len(unique_labels)),
+        "silhouette_score": silhouette,
+        "davies_bouldin_index": dbi,
+        "calinski_harabasz_score": ch,
+        "mean_intra_class_distance": intra_mean,
+        "mean_inter_class_distance": inter_mean,
+        "intra_over_inter_ratio": separation_ratio,
+    }
+
+    figures_dir = os.path.join(output_dir, "figures")
+    os.makedirs(figures_dir, exist_ok=True)
+    metrics_path = os.path.join(figures_dir, "metric_learning_quality.json")
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(metrics, f, ensure_ascii=False, indent=2)
+    print(f"度量学习质量指标已保存到: {metrics_path}")
+
+    # 可视化：同类/异类距离分布
+    plt.figure(figsize=(10, 6))
+    if intra:
+        plt.hist(intra, bins=50, alpha=0.6, label="Intra-class distance", color="tab:blue")
+    if inter:
+        plt.hist(inter, bins=50, alpha=0.6, label="Inter-class distance", color="tab:orange")
+    plt.title("Intra vs Inter Class Distance Distribution", fontsize=14, fontweight='bold')
+    plt.xlabel("Distance")
+    plt.ylabel("Frequency")
+    plt.legend()
+    plt.grid(True, alpha=0.25)
+    dist_cmp_path = os.path.join(figures_dir, "intra_inter_distance_distribution.pdf")
+    plt.tight_layout()
+    plt.savefig(dist_cmp_path, bbox_inches='tight', format='pdf')
+    plt.close()
+    print(f"同类/异类距离分布图已保存到: {dist_cmp_path}")
+
+    # 每类轮廓系数（便于定位问题类别）
+    from sklearn.metrics import silhouette_samples
+    sil_samples = silhouette_samples(features, labels)
+    per_class_sil = []
+    class_names = []
+    for lb in unique_labels:
+        mask = labels == lb
+        per_class_sil.append(float(np.mean(sil_samples[mask])))
+        if int(lb) < len(species_names):
+            class_names.append(species_names[int(lb)])
+        else:
+            class_names.append(str(int(lb)))
+
+    plt.figure(figsize=(max(12, len(class_names) * 0.35), 6))
+    plt.bar(range(len(class_names)), per_class_sil, color='slateblue', alpha=0.8)
+    plt.axhline(0, color='black', linewidth=1)
+    plt.title("Per-class Silhouette Score", fontsize=14, fontweight='bold')
+    plt.xlabel("Species")
+    plt.ylabel("Silhouette")
+    plt.xticks(range(len(class_names)), class_names, rotation=90, fontsize=7)
+    plt.grid(axis='y', alpha=0.25)
+    sil_path = os.path.join(figures_dir, "per_class_silhouette.pdf")
+    plt.tight_layout()
+    plt.savefig(sil_path, bbox_inches='tight', format='pdf')
+    plt.close()
+    print(f"每类轮廓系数图已保存到: {sil_path}")
+
+    return metrics
+
+
+EXPERIMENT_RECORD_FIELDS = [
+    "run_time_utc",
+    "image_type",
+    "model_type",
+    "seed",
+    "num_epochs",
+    "learning_rate",
+    "margin",
+    "classification_weight",
+    "triplet_weight",
+    "batch_size",
+    "best_epoch_by_val_acc",
+    "best_val_acc",
+    "best_val_total_loss",
+    "best_val_triplet_loss",
+    "best_val_classification_loss",
+    "notes",
+]
+
+
+def append_experiment_record(record, save_path):
+    """
+    将一次实验结果追加到 CSV（Excel 可直接打开）。
+    若文件不存在会先写表头。
+    """
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    file_exists = os.path.exists(save_path)
+
+    with open(save_path, "a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=EXPERIMENT_RECORD_FIELDS)
+        if not file_exists:
+            writer.writeheader()
+
+        normalized = {k: record.get(k, "") for k in EXPERIMENT_RECORD_FIELDS}
+        writer.writerow(normalized)
